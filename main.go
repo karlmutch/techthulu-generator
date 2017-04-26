@@ -219,7 +219,7 @@ func writeSlot(outputDir string, second int, portal *portalStatus) (err error) {
 		return err
 	}
 
-	output, err := json.MarshalIndent(portal.Status.fixPortal(), "", "    ")
+	output, err := json.MarshalIndent(&portalStatus{Status: portal.Status.fixPortal()}, "", "    ")
 	if err != nil {
 		return err
 	}
