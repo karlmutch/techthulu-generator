@@ -4,6 +4,8 @@ package main
 // It is not generally intended to be used as is.
 
 import (
+	"bytes"
+	"encoding/gob"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -50,28 +52,64 @@ type portalStatus struct {
 	Status *status `json:"status"`
 }
 
-func (portal *status) fixPortal() {
+func (portal *status) copy() (result *status) {
+
+	result = &status{}
+
+	mod := &bytes.Buffer{}
+
+	gob.NewEncoder(mod).Encode(portal)
+	gob.NewDecoder(mod).Decode(result)
+
+	return result
+}
+
+func (portal *status) fixPortal() (result *status) {
+
+	result = &status{
+		Title:              portal.Title,
+		Owner:              portal.Owner,
+		Level:              portal.Level,
+		Health:             portal.Health,
+		ControllingFaction: portal.ControllingFaction,
+		Mods:               []string{},
+		Resonators:         []resonator{},
+	}
+
+	for _, res := range portal.Resonators {
+		if 0 == res.Health {
+			continue
+		}
+		result.Resonators = append(result.Resonators, res)
+	}
 
 	// Check for a neutral portal before trying to
 	// do the match for portal alignment etc
-	if len(portal.Resonators) == 0 {
-		portal.Health = 0
-		portal.Level = 0
-		portal.Owner = ""
-		portal.Mods = []string{}
-		return
+	if len(result.Resonators) == 0 {
+		return &status{
+			Title:              portal.Title,
+			Owner:              "",
+			Level:              0,
+			Health:             0,
+			ControllingFaction: "0",
+			Mods:               []string{},
+			Resonators:         []resonator{},
+		}
 	}
 
-	hlth := 0
-	levels := 0
-	for _, res := range portal.Resonators {
-		hlth += res.Health
-		levels += res.Level
+	result.Health = 0
+	result.Level = 0
+	for _, res := range result.Resonators {
+		result.Health += res.Health
+		result.Level += res.Level
 	}
-	// Integer math betwen ints is roundign down intentionally
+
+	// Integer math betwen ints is rounding down intentionally
 	// based upons Ingress rules for portal leveling and health
-	portal.Health = hlth / len(portal.Resonators)
-	portal.Level = levels / len(portal.Resonators)
+	result.Health = result.Health / len(result.Resonators)
+	result.Level = result.Level / len(result.Resonators)
+
+	return result
 }
 
 func dirExists(path string) (bool, error) {
@@ -149,54 +187,39 @@ func main() {
 	}
 
 	positions := []string{"E", "NE", "N", "NW", "W", "SW", "S", "SE"}
+	levels := []int{1, 1, 1, 1, 1, 1, 1, 1}
 
-	// Start at second 0 with nothing then go and step once every 2 seconds
-	// using a switch for each step along the way generating changes and writting
-	// then until we are done
+	//for _, position := range positions {
+	//	portal.Status.Resonators = append(portal.Status.Resonators, resonator{Position: position, Level: 1})
+	//}
+	//_, second, _ := neutralToOwned(*outputDir, portal, 0)
+
 	second := 0
+	levels = []int{8, 7, 6, 6, 5, 5, 4, 4}
+	for i, position := range positions {
+		portal.Status.Resonators = append(portal.Status.Resonators, resonator{Position: position, Level: levels[i]})
+	}
+	_, second, _ = neutralToNeutralSlow(*outputDir, portal, 0)
 
-	func() {
-		for {
-			switch second {
-			case 0:
-				err = writeSlot(*outputDir, 0, portal)
-			case 2:
-				for _, position := range positions {
-					portal.Status.Resonators = append(portal.Status.Resonators, resonator{Position: position})
-				}
-				err = writeSlot(*outputDir, 0, portal)
-			case 4:
-				err = writeSlot(*outputDir, 0, portal)
-			case 6, 8, 10, 12, 14, 16, 18, 20, 22, 24:
-				for i, _ := range portal.Status.Resonators {
-					portal.Status.Resonators[i].Health += 10
-					portal.Status.Resonators[i].Level = 1
-					portal.Status.Resonators[i].Owner = "Morty"
-				}
-				err = writeSlot(*outputDir, second, portal)
-			case 26:
-				return
-			}
-			if err != nil {
-				logW.Fatal(fmt.Sprintf("test data generation failed with %s", err.Error()), "error", err)
-				os.Exit(-5)
-			}
-			second++
-		}
-	}()
+	// Put a gap in between captures
+	second += 45
+
+	// Now change the faction and roll owning faction capture and loss again
+	portal.Status.ControllingFaction = "2"
+	_, second, _ = neutralToNeutralSlow(*outputDir, portal, second)
+	second += 45
+
 	writeDone(*outputDir, second)
 }
 
 func writeSlot(outputDir string, second int, portal *portalStatus) (err error) {
-
-	portal.Status.fixPortal()
 
 	dirName := path.Join(outputDir, strconv.Itoa(second), "module", "status")
 	if err := os.MkdirAll(dirName, 0755); err != nil {
 		return err
 	}
 
-	output, err := json.MarshalIndent(portal, "", "    ")
+	output, err := json.MarshalIndent(portal.Status.fixPortal(), "", "    ")
 	if err != nil {
 		return err
 	}
@@ -211,4 +234,131 @@ func writeDone(outputDir string, second int) (err error) {
 	}
 
 	return ioutil.WriteFile(path.Join(dirName, "finish"), []byte{}, 0755)
+}
+
+func neutralToOwned(scenarioDir string, template *portalStatus, offset int) (final *portalStatus, lastSecond int, err error) {
+
+	portal := &portalStatus{
+		Status: template.Status.copy(),
+	}
+
+	second := 0
+
+	for {
+		switch second {
+		case 0:
+			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
+				return final, 0, err
+			}
+		case 2:
+			for _, res := range template.Status.Resonators {
+				portal.Status.Resonators = append(portal.Status.Resonators, resonator{Position: res.Position, Level: res.Level})
+			}
+			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
+				return final, 0, err
+			}
+		case 4:
+			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
+				return final, 0, err
+			}
+		case 6, 8, 10, 12, 14, 16, 18, 20, 22, 24:
+			for i, _ := range portal.Status.Resonators {
+				portal.Status.Resonators[i].Health += 10
+				if 0 == len(portal.Status.Resonators[i].Owner) {
+					switch portal.Status.ControllingFaction {
+					case "1":
+						portal.Status.Resonators[i].Owner = "Morty"
+					case "2":
+						portal.Status.Resonators[i].Owner = "Rick"
+					}
+				}
+			}
+			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
+				return final, 0, err
+			}
+		case 26:
+
+			final = &portalStatus{
+				Status: portal.Status.fixPortal(),
+			}
+			return final, offset + second, nil
+		}
+		if err != nil {
+			logW.Fatal(fmt.Sprintf("test data generation failed with %s", err.Error()), "error", err)
+			os.Exit(-5)
+		}
+		second++
+	}
+}
+
+func neutralToNeutralSlow(scenarioDir string, template *portalStatus, offset int) (final *portalStatus, lastSecond int, err error) {
+
+	portal := &portalStatus{
+		Status: template.Status.copy(),
+	}
+
+	second := 0
+
+	for {
+		switch second {
+		case 0:
+			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
+				return final, 0, err
+			}
+		case 2:
+			for _, res := range template.Status.Resonators {
+				portal.Status.Resonators = append(portal.Status.Resonators, resonator{Position: res.Position, Level: res.Level})
+			}
+			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
+				return final, 0, err
+			}
+
+		case 4:
+			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
+				return final, 0, err
+			}
+
+		case 6, 8, 10, 12, 14, 16, 18, 20, 22, 24:
+			for i, _ := range portal.Status.Resonators {
+				portal.Status.Resonators[i].Health += 10
+				if 0 == len(portal.Status.Resonators[i].Owner) {
+					switch portal.Status.ControllingFaction {
+					case "1":
+						portal.Status.Resonators[i].Owner = "Morty"
+					case "2":
+						portal.Status.Resonators[i].Owner = "Rick"
+					}
+				}
+			}
+			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
+				return final, 0, err
+			}
+
+		case 28, 30, 32, 34, 36, 38, 40, 42:
+			for i, _ := range portal.Status.Resonators {
+				portal.Status.Resonators[i].Health -= 10
+				if 0 == len(portal.Status.Resonators[i].Owner) {
+					switch portal.Status.ControllingFaction {
+					case "1":
+						portal.Status.Resonators[i].Owner = "Morty"
+					case "2":
+						portal.Status.Resonators[i].Owner = "Rick"
+					}
+				}
+			}
+			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
+				return final, 0, err
+			}
+		case 46:
+			final = &portalStatus{
+				Status: portal.Status.fixPortal(),
+			}
+			return final, offset + second, nil
+		}
+		if err != nil {
+			logW.Fatal(fmt.Sprintf("test data generation failed with %s", err.Error()), "error", err)
+			os.Exit(-5)
+		}
+		second++
+	}
 }
