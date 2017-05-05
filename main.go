@@ -80,6 +80,12 @@ func (portal *status) fixPortal() (result *status) {
 		if 0 == res.Health {
 			continue
 		}
+		switch portal.ControllingFaction {
+		case "1":
+			res.Owner = "Morty"
+		case "2":
+			res.Owner = "Rick"
+		}
 		result.Resonators = append(result.Resonators, res)
 	}
 
@@ -199,15 +205,7 @@ func main() {
 	for i, position := range positions {
 		portal.Status.Resonators = append(portal.Status.Resonators, resonator{Position: position, Level: levels[i]})
 	}
-	_, second, _ = neutralToNeutralSlow(*outputDir, portal, 0)
-
-	// Put a gap in between captures
-	second += 45
-
-	// Now change the faction and roll owning faction capture and loss again
-	portal.Status.ControllingFaction = "2"
-	_, second, _ = neutralToNeutralSlow(*outputDir, portal, second)
-	second += 45
+	_, second, _ = portalBuild(*outputDir, portal, second)
 
 	writeDone(*outputDir, second)
 }
@@ -264,14 +262,6 @@ func neutralToOwned(scenarioDir string, template *portalStatus, offset int) (fin
 		case 6, 8, 10, 12, 14, 16, 18, 20, 22, 24:
 			for i, _ := range portal.Status.Resonators {
 				portal.Status.Resonators[i].Health += 10
-				if 0 == len(portal.Status.Resonators[i].Owner) {
-					switch portal.Status.ControllingFaction {
-					case "1":
-						portal.Status.Resonators[i].Owner = "Morty"
-					case "2":
-						portal.Status.Resonators[i].Owner = "Rick"
-					}
-				}
 			}
 			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
 				return final, 0, err
@@ -321,14 +311,6 @@ func neutralToNeutralSlow(scenarioDir string, template *portalStatus, offset int
 		case 6, 8, 10, 12, 14, 16, 18, 20, 22, 24:
 			for i, _ := range portal.Status.Resonators {
 				portal.Status.Resonators[i].Health += 10
-				if 0 == len(portal.Status.Resonators[i].Owner) {
-					switch portal.Status.ControllingFaction {
-					case "1":
-						portal.Status.Resonators[i].Owner = "Morty"
-					case "2":
-						portal.Status.Resonators[i].Owner = "Rick"
-					}
-				}
 			}
 			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
 				return final, 0, err
@@ -337,19 +319,120 @@ func neutralToNeutralSlow(scenarioDir string, template *portalStatus, offset int
 		case 28, 30, 32, 34, 36, 38, 40, 42:
 			for i, _ := range portal.Status.Resonators {
 				portal.Status.Resonators[i].Health -= 10
-				if 0 == len(portal.Status.Resonators[i].Owner) {
-					switch portal.Status.ControllingFaction {
-					case "1":
-						portal.Status.Resonators[i].Owner = "Morty"
-					case "2":
-						portal.Status.Resonators[i].Owner = "Rick"
-					}
-				}
 			}
 			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
 				return final, 0, err
 			}
 		case 46:
+			final = &portalStatus{
+				Status: portal.Status.fixPortal(),
+			}
+			return final, offset + second, nil
+		}
+		if err != nil {
+			logW.Fatal(fmt.Sprintf("test data generation failed with %s", err.Error()), "error", err)
+			os.Exit(-5)
+		}
+		second++
+	}
+}
+
+func portalBuild(scenarioDir string, template *portalStatus, offset int) (final *portalStatus, lastSecond int, err error) {
+
+	portal := &portalStatus{
+		Status: template.Status.copy(),
+	}
+
+	portal.Status.Resonators = []resonator{}
+	level := 4
+	for i, res := range template.Status.Resonators {
+		// Resonators dont increase one level per position but instead
+		// decreased to their maximum permitted level
+		switch i {
+		case 2, 4, 6, 7:
+			level++
+		}
+		portal.Status.Resonators = append(portal.Status.Resonators, resonator{
+			Position: res.Position,
+			Level:    level,
+			Health:   0,
+		})
+	}
+
+	second := 0
+	activeRes := 7
+
+	for {
+		switch second {
+		// Use the follow levels of resonators at each second marked
+		//   8, 7, 6, 6,  5,  5,  4,  4,
+		case 0, 3, 6, 9, 12, 15, 18, 21:
+			// Activate resonators starting at the right end and
+			// counting down putting smaller resos at each
+			// desending position
+			portal.Status.Resonators[activeRes].Health = 100
+			activeRes--
+			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
+				return final, 0, err
+			}
+
+		case 24:
+			// Change faction then add resonators starting at position 0
+			// with level 8 and going down as we head to the right end, so
+			// prepare the new data and write the neutral portal data
+			switch template.Status.ControllingFaction {
+			case "1":
+				portal.Status.ControllingFaction = "2"
+			case "2":
+				portal.Status.ControllingFaction = "1"
+			}
+
+			portal.Status.Resonators = []resonator{}
+			level = 8
+			for i, res := range template.Status.Resonators {
+				portal.Status.Resonators = append(portal.Status.Resonators, resonator{
+					Position: res.Position,
+					Level:    level,
+					Health:   0,
+				})
+				// Resonators dont increase one level per position but instead
+				// decreased to their maximum permitted level
+				switch i {
+				case 0, 1, 3, 5:
+					level--
+				}
+			}
+			// After clearing everything make sure we write
+			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
+				return final, 0, err
+			}
+			// When we start the next test case start at res 8 and then
+			// fill in the new resonators for the opposing faction, the
+			// levels that each one will be will already be populated
+			activeRes = 0
+
+		case 33, 36, 39, 42, 45, 48, 51, 64:
+			portal.Status.Resonators[activeRes].Health = 100
+			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
+				return final, 0, err
+			}
+			activeRes++
+
+		case 67:
+			portal.Status.Resonators = []resonator{}
+			for _, res := range template.Status.Resonators {
+				portal.Status.Resonators = append(portal.Status.Resonators, resonator{
+					Position: res.Position,
+					Level:    0,
+					Health:   0,
+				})
+			}
+			// After clearing everything make sure we write
+			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
+				return final, 0, err
+			}
+
+		case 76:
 			final = &portalStatus{
 				Status: portal.Status.fixPortal(),
 			}
