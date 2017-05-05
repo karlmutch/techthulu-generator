@@ -411,14 +411,14 @@ func portalBuild(scenarioDir string, template *portalStatus, offset int) (final 
 			// levels that each one will be will already be populated
 			activeRes = 0
 
-		case 33, 36, 39, 42, 45, 48, 51, 64:
+		case 33, 36, 39, 42, 45, 48, 51, 54:
 			portal.Status.Resonators[activeRes].Health = 100
 			if err = writeSlot(scenarioDir, second+offset, portal); err != nil {
 				return final, 0, err
 			}
 			activeRes++
 
-		case 67:
+		case 57:
 			portal.Status.Resonators = []resonator{}
 			for _, res := range template.Status.Resonators {
 				portal.Status.Resonators = append(portal.Status.Resonators, resonator{
@@ -432,7 +432,7 @@ func portalBuild(scenarioDir string, template *portalStatus, offset int) (final 
 				return final, 0, err
 			}
 
-		case 76:
+		case 66:
 			final = &portalStatus{
 				Status: portal.Status.fixPortal(),
 			}
